@@ -97,7 +97,7 @@
         </div>
 
         <div class="flex gap-2">
-            <button id="btn-refresh" onclick="fetchSheets()" class="px-3 py-1.5 bg-bg3 hover:bg-border text-accent border border-border rounded transition-colors font-mono text-xs flex items-center gap-2">
+            <button id="btn-refresh" onclick="fetchCSV()" class="px-3 py-1.5 bg-bg3 hover:bg-border text-accent border border-border rounded transition-colors font-mono text-xs flex items-center gap-2">
                 ↻ GÜNCELLE
             </button>
         </div>
@@ -329,7 +329,7 @@
             <div class="bg-bg2 border border-border rounded overflow-hidden mb-4">
                 <div class="p-4 md:p-5 border-b border-border flex flex-col md:flex-row justify-between items-start md:items-center gap-1">
                     <div class="font-bebas text-base tracking-[2px] text-text2">ÇALIŞAN PERFORMANS TABLOSU</div>
-                    <div class="text-[11px] text-text3 font-mono">02.02 — 21.02.2026</div>
+                    <div id="ca-range" class="text-[11px] text-text3 font-mono">-</div>
                 </div>
                 <div class="overflow-x-auto">
                     <table class="w-full border-collapse">
@@ -750,44 +750,34 @@ function renderF(){
   document.getElementById('f-tbody').innerHTML=fl.map(x=>`<tr class="${tr}"><td class="${td}"><b class="font-mono text-text">${x.f}</b></td><td class="${td} font-mono text-text3">${Math.round(x.u).toLocaleString('tr-TR')}</td><td class="${td}">${pb(x.aP)}</td><td class="${td} font-mono text-text3">${x.c}</td></tr>`).join('');
 }
 
-// ===== GOOGLE SHEETS CONFIG =====
-const SHEETS_ID = '1ATveln1EB7AkFBLHTWSNm0nt8U4syYNYEgfRYHwDg7c';
-const SHEETS_GID = '670708123';
+const CSV_URL_DIRECT = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vS6Oc7Fa2D0TOVcth9hfJ8GKeRf0O7_I-1dUxwFd-EqlG1F9JSvPnqVesKklofAiJPRJ-lkTTAcRD7v/pub?gid=670708123&single=true&output=csv';
+const CSV_URL_PROXY = 'https://r.jina.ai/http://docs.google.com/spreadsheets/d/e/2PACX-1vS6Oc7Fa2D0TOVcth9hfJ8GKeRf0O7_I-1dUxwFd-EqlG1F9JSvPnqVesKklofAiJPRJ-lkTTAcRD7v/pub?gid=670708123&single=true&output=csv';
 
+function parseCSV(text) {
+  const marker = 'Markdown Content:';
+  if (text.includes(marker)) {
+    text = text.split(marker)[1] || '';
+  }
+  const lines = text.split('\n').map(l => l.trim()).filter(l => l);
+  if (!lines.length) return [];
+  const headers = lines[0].split(',').map(h => h.replace(/^"|"$/g,'').trim());
+  const parsed = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = [];
+    let cur = '', inQ = false;
+    for (const ch of lines[i]) {
+      if (ch === '"') { inQ = !inQ; }
+      else if (ch === ',' && !inQ) { cols.push(cur.trim()); cur = ''; }
+      else { cur += ch; }
+    }
+    cols.push(cur.trim());
 
-
-// ===== GOOGLE SHEETS JSON PARSER =====
-function parseGoogleSheetsJSON(json) {
-  if (!json || !json.table || !json.table.rows) return [];
-  
-  const cols = json.table.cols || [];
-  const headers = cols.map(c => c ? (c.label || '').trim() : '');
-  
-  return json.table.rows.map(r => {
-    if (!r || !r.c) return null;
     const row = {};
-    r.c.forEach((cell, i) => {
-      if (headers[i]) {
-        // cell.v is the raw value, cell.f is formatted
-        let val = (cell && cell.v !== null && cell.v !== undefined) ? cell.v : '';
-        // Handle Date(yyyy,m,d) strings if any
-        if (typeof val === 'string' && val.startsWith('Date(')) {
-          const parts = val.match(/\d+/g);
-          if (parts && parts.length >= 3) {
-            const d = new Date(Number(parts[0]), Number(parts[1]), Number(parts[2]));
-            val = d.toLocaleDateString('tr-TR'); // or format as DD.MM.YYYY manually
-            // Ensure DD.MM.YYYY format
-            const day = String(d.getDate()).padStart(2, '0');
-            const month = String(d.getMonth() + 1).padStart(2, '0');
-            const year = d.getFullYear();
-            val = `${day}.${month}.${year}`;
-          }
-        }
-        row[headers[i]] = val;
-      }
-    });
-    return mapRowData(row);
-  }).filter(x => x);
+    headers.forEach((h, idx) => { row[h] = (cols[idx] || '').replace(/^"|"$/g,'').trim(); });
+    const mapped = mapRowData(row);
+    if (mapped) parsed.push(mapped);
+  }
+  return parsed;
 }
 
 // Shared Data Mapper
@@ -796,7 +786,12 @@ function mapRowData(row) {
   const toNum = v => {
     if (typeof v === 'number') return v;
     if (!v || v === '-' || v === '') return 0;
-    return parseFloat(v.toString().replace(/\./g,'').replace(',','.')) || 0;
+    return parseFloat(v.toString().replace(/\./g,'').replace(',','.').replace('%','')) || 0;
+  };
+  const toPercent = v => {
+    const n = toNum(v);
+    if (n > 0 && n <= 1) return n * 100;
+    return n;
   };
 
   const tarih = row['Tarih'] || row['tarih'] || '';
@@ -805,18 +800,18 @@ function mapRowData(row) {
   const pres1 = row['Pres1'] || row['Pres 1'] || row['pres1'] || '';
   const fason1 = row['Fason1'] || row['Fason 1'] || row['fason1'] || '';
   const uretim1 = toNum(row['Üretilen Adet 1'] || row['Üretim 1'] || row['uretim1'] || '0');
-  const perf1 = toNum(row['Üretim Yüzdesi (Performans)'] || row['Performans 1'] || row['perf1'] || row['Verimlilik 1'] || '0');
+  const perf1 = toPercent(row['Üretim Yüzdesi (Performans)'] || row['Performans 1'] || row['perf1'] || row['Verimlilik 1'] || '0');
   const durus1 = toNum(row['Duruş Süresi 1 (dk)'] || row['Duruş 1'] || row['durus1'] || '0');
   const pres2 = row['Pres2'] || row['Pres 2'] || row['pres2'] || '';
   const fason2 = row['Fason2'] || row['Fason 2'] || row['fason2'] || '';
   const uretim2 = toNum(row['Üretilen Adet 2'] || row['Üretim 2'] || row['uretim2'] || '0');
-  const perf2 = toNum(row['Üretim Yüzdesi (Performans)2'] || row['Performans 2'] || row['perf2'] || row['Verimlilik 2'] || '0');
+  const perf2 = toPercent(row['Üretim Yüzdesi (Performans)2'] || row['Performans 2'] || row['perf2'] || row['Verimlilik 2'] || '0');
   const durus2 = toNum(row['Duruş Süresi 2 (dk)'] || row['Duruş 2'] || row['durus2'] || '0');
   
   const tU_raw = toNum(row['Toplam Üretilen Çift Kafa Günlük Adet'] || row['Toplam Üretim'] || row['tU'] || row['toplamUretim'] || '0');
   const tU = tU_raw || (uretim1 + uretim2);
   
-  const tP_raw = toNum(row['Günlük Toplam Performans'] || row['Toplam Performans'] || row['tP'] || row['toplamPerf'] || '0');
+  const tP_raw = toPercent(row['Günlük Toplam Performans'] || row['Toplam Performans'] || row['tP'] || row['toplamPerf'] || '0');
   const tP = tP_raw || (perf1 && perf2 ? (perf1+perf2)/2 : perf1 || perf2);
 
   if (!tarih || !calisan || tU === 0) return null; // skip empty rows
@@ -906,6 +901,8 @@ function updateHeaderKPIs() {
     document.getElementById('hdr-workers').textContent = '-';
     document.getElementById('hdr-days').textContent = '-';
     document.getElementById('hdr-range').textContent = '-';
+    const caRange = document.getElementById('ca-range');
+    if (caRange) caRange.textContent = '-';
     return;
   }
   const tU = RAW.reduce((s,r)=>s+r.tU,0);
@@ -918,6 +915,8 @@ function updateHeaderKPIs() {
   document.getElementById('hdr-workers').textContent = workers;
   document.getElementById('hdr-days').textContent = DATES.length + ' Gün';
   document.getElementById('hdr-range').textContent = (d0 ? d0.slice(0,5) : '') + ' — ' + (d1 || '');
+  const caRange = document.getElementById('ca-range');
+  if (caRange) caRange.textContent = (d0 ? d0.slice(0,5) : '') + ' — ' + (d1 || '');
 }
 
 function setSrcStatus(label, info, color) {
@@ -959,60 +958,37 @@ function showErrorState() {
   });
 }
 
-// ===== GOOGLE SHEETS FETCH (JSONP to bypass CORS) =====
-function fetchSheets() {
+function fetchCSV() {
   const btn = document.getElementById('btn-refresh');
   btn.textContent = '⟳ Yükleniyor...';
   btn.disabled = true;
-  setSrcStatus('Bağlanıyor...', 'Google Sheets JSONP', '#f5c842');
+  setSrcStatus('Bağlanıyor...', 'CSV', '#f5c842');
   showSkeleton();
-
-  // Define global callback
-  window.sheetCallback = function(json) {
-    try {
-      if (!json || !json.table) throw new Error('Geçersiz veri formatı');
-      const data = parseGoogleSheetsJSON(json);
+  const tryFetch = (url) => fetch(url, { cache: 'no-store', redirect: 'follow' })
+    .then(res => {
+      if (!res.ok) throw new Error('CSV alınamadı');
+      return res.text();
+    })
+  tryFetch(CSV_URL_PROXY)
+    .catch(() => tryFetch(CSV_URL_DIRECT))
+    .then(text => {
+      const data = parseCSV(text);
       if (data.length === 0) throw new Error('Veri satırı bulunamadı');
-      applyData(data, 'GOOGLE SHEETS (CANLI)');
-    } catch (e) {
+      applyData(data, 'CSV (CANLI)');
+    })
+    .catch(e => {
       setSrcStatus('VERİ HATASI', e.message, '#e86d3a');
       showErrorState();
-      console.warn('Sheets parse failed:', e);
-    } finally {
+    })
+    .finally(() => {
       btn.textContent = '↻ GÜNCELLE';
       btn.disabled = false;
-      const s = document.getElementById('gviz-script');
-      if (s) s.remove();
-      delete window.sheetCallback;
-    }
-  };
-
-  // Create script tag
-  const script = document.createElement('script');
-  script.id = 'gviz-script';
-  // Use unique timestamp to prevent caching
-  const ts = Date.now();
-  // Using 'sheetCallback' which must be on window
-  script.src = `https://docs.google.com/spreadsheets/d/${SHEETS_ID}/gviz/tq?tqx=responseHandler:sheetCallback&gid=${SHEETS_GID}&_=${ts}`;
-  
-  script.onerror = function() {
-    setSrcStatus('BAĞLANTI HATASI', 'Erişim engellendi (CORS/Ağ)', '#e86d3a');
-    showErrorState();
-    btn.textContent = '↻ GÜNCELLE';
-    btn.disabled = false;
-    const s = document.getElementById('gviz-script');
-    if (s) s.remove();
-    delete window.sheetCallback;
-  };
-
-  document.body.appendChild(script);
+    });
 }
 
 
 
-// ===== INIT: try Sheets first =====
-// Do NOT render static data.
-fetchSheets();
+fetchCSV();
 </script>
 </body>
 </html>
